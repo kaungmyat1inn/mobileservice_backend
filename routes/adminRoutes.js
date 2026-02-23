@@ -21,6 +21,12 @@ router.put(
   checkSuperAdmin,
   adminController.updateShopPassword,
 );
+router.post(
+  "/shops/:id/extend",
+  protect,
+  checkSuperAdmin,
+  adminController.extendShopSubscription,
+);
 router.patch(
   "/shops/:id/limit",
   protect,
@@ -38,6 +44,14 @@ router.delete(
   protect,
   checkSuperAdmin,
   adminController.deleteShop,
+);
+
+// /api/admin/financial-stats
+router.get(
+  "/financial-stats",
+  protect,
+  checkSuperAdmin,
+  adminController.getFinancialStats,
 );
 
 // /api/admin/subscription-plans

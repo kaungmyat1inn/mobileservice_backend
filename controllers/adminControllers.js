@@ -3,6 +3,8 @@ const User = require("../models/user");
 const Job = require("../models/Job");
 const ShopOwner = require("../models/ShopOwner");
 const SubscriptionPlan = require("../models/SubscriptionPlan");
+const Staff = require("../models/Staff");
+const Expense = require("../models/Expense");
 const { SUBSCRIPTION_CLASSES } = require("../models/shop");
 const {
   buildQrLink,
@@ -56,25 +58,17 @@ exports.createShop = async (req, res) => {
     let startDate = subscriptionStart ? new Date(subscriptionStart) : new Date();
     let expireDate;
 
-    // Calculate staff limit based on subscription class
-    // Default to Basic (1 staff) if not specified
-    let calculatedMaxStaff = SUBSCRIPTION_CLASSES['Basic'].defaultStaff;
-    
-    if (subscriptionClass && SUBSCRIPTION_CLASSES[subscriptionClass]) {
-      calculatedMaxStaff = SUBSCRIPTION_CLASSES[subscriptionClass].defaultStaff;
-    }
-
     // Override with explicit maxStaffAllowed if provided
-    let finalMaxStaff = explicitMaxStaff || calculatedMaxStaff;
+    let finalMaxStaff = explicitMaxStaff || 1;
 
     // If subscriptionPlanId is provided, look up the plan for duration
     // Handle both MongoDB ObjectId and string IDs like "monthly", "yearly", "trial"
     if (subscriptionPlanId) {
       let plan = null;
-      
+
       // Check if it's a valid MongoDB ObjectId (24 character hex string)
       const isValidObjectId = /^[0-9a-fA-F]{24}$/.test(subscriptionPlanId);
-      
+
       if (isValidObjectId) {
         // It's a valid ObjectId, try to find by ID
         plan = await SubscriptionPlan.findById(subscriptionPlanId);
@@ -84,12 +78,12 @@ exports.createShop = async (req, res) => {
         const planName = subscriptionPlanId.charAt(0).toUpperCase() + subscriptionPlanId.slice(1).toLowerCase();
         plan = await SubscriptionPlan.findOne({ name: planName });
       }
-      
+
       if (plan) {
         planName = plan.name;
         expireDate = new Date(startDate);
         expireDate.setDate(expireDate.getDate() + plan.durationDays);
-        
+
         // Use plan's maxStaffAllowed if not explicitly provided
         if (!explicitMaxStaff) {
           finalMaxStaff = plan.maxStaffAllowed;
@@ -108,10 +102,17 @@ exports.createShop = async (req, res) => {
     const shop = new Shop({
       ...shopData,
       subscriptionPlan: planName,
-      subscriptionClass: subscriptionClass || 'Basic',
       subscriptionStart: startDate,
       subscriptionExpire: expireDate,
       maxStaffAllowed: finalMaxStaff,
+    });
+
+    // Add initial payment record
+    const initialPrice = plan ? plan.price : (planName === 'yearly' ? 500000 : (planName === 'monthly' ? 50000 : 0));
+    shop.paymentHistory.push({
+      planName: planName,
+      price: initialPrice,
+      date: startDate,
     });
 
     await shop.save();
@@ -139,7 +140,7 @@ exports.createShop = async (req, res) => {
 exports.getAllShops = async (req, res) => {
   try {
     const shops = await Shop.find();
-    
+
     // Get job counts for each shop
     const shopsWithJobCounts = await Promise.all(
       shops.map(async (shop) => {
@@ -150,7 +151,7 @@ exports.getAllShops = async (req, res) => {
         };
       })
     );
-    
+
     res.status(200).json(shopsWithJobCounts);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -212,13 +213,13 @@ exports.getAllJobs = async (req, res) => {
 // ၃။ ဆိုင်တစ်ခုကို ပိတ်ခြင်း (Disable) သို့မဟုတ် ပြင်ဆင်ခြင်း
 exports.updateShopStatus = async (req, res) => {
   try {
-    const { 
-      subscriptionExpire, 
-      subscriptionClass, 
+    const {
+      subscriptionExpire,
+      subscriptionClass,
       maxStaffAllowed: explicitMaxStaff,
-      ...rest 
+      ...rest
     } = req.body;
-    
+
     const updateData = { ...rest };
 
     if (subscriptionExpire) {
@@ -228,12 +229,6 @@ exports.updateShopStatus = async (req, res) => {
     // Handle subscription class changes
     if (subscriptionClass) {
       updateData.subscriptionClass = subscriptionClass;
-      
-      // If subscriptionClass is changed and maxStaffAllowed is NOT explicitly provided,
-      // auto-fill with the class default
-      if (!explicitMaxStaff && SUBSCRIPTION_CLASSES[subscriptionClass]) {
-        updateData.maxStaffAllowed = SUBSCRIPTION_CLASSES[subscriptionClass].defaultStaff;
-      }
     }
 
     // If maxStaffAllowed is explicitly provided, always override
@@ -247,6 +242,66 @@ exports.updateShopStatus = async (req, res) => {
     res.status(200).json(shop);
   } catch (error) {
     res.status(400).json({ message: error.message });
+  }
+};
+
+// ၃.၁။ ဆိုင်သက်တမ်းတိုးခြင်း (Extend Subscription)
+exports.extendShopSubscription = async (req, res) => {
+  try {
+    const { planName } = req.body;
+    const shopId = req.params.id;
+
+    const shop = await Shop.findById(shopId);
+    if (!shop) return res.status(404).json({ message: "Shop not found" });
+
+    // Lookup plan ignoring case
+    const plan = await SubscriptionPlan.findOne({ name: new RegExp('^' + planName + '$', 'i') });
+    if (!plan) return res.status(404).json({ message: "Plan not found" });
+
+    const now = new Date();
+    // Start extension from current expiry or now if already expired
+    const currentExpire = new Date(shop.subscriptionExpire);
+    const startDateForExtension = currentExpire > now ? currentExpire : now;
+
+    const newExpire = new Date(startDateForExtension);
+    newExpire.setDate(newExpire.getDate() + plan.durationDays);
+
+    // Seed paymentHistory for legacy shops if empty
+    if (!shop.paymentHistory || shop.paymentHistory.length === 0) {
+      const pName = shop.subscriptionPlan || 'trial';
+      const legacyPlan = await SubscriptionPlan.findOne({ name: new RegExp('^' + pName + '$', 'i') });
+      let legacyPrice = 0;
+      if (legacyPlan) {
+        legacyPrice = legacyPlan.price;
+      } else if (pName.toLowerCase() === 'yearly') {
+        legacyPrice = 500000;
+      } else if (pName.toLowerCase() === 'monthly') {
+        legacyPrice = 50000;
+      }
+
+      shop.paymentHistory.push({
+        planName: pName,
+        price: legacyPrice,
+        date: new Date(shop.subscriptionStart || shop.createdAt)
+      });
+    }
+
+    shop.subscriptionExpire = newExpire;
+    shop.subscriptionPlan = plan.name;
+    shop.maxStaffAllowed = plan.maxStaffAllowed;
+
+    // Add to payment history for financial stats
+    shop.paymentHistory.push({
+      planName: plan.name,
+      price: plan.price,
+      date: now
+    });
+
+    await shop.save();
+
+    res.status(200).json({ message: "Shop subscription extended successfully", shop });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
   }
 };
 
@@ -313,8 +368,8 @@ exports.updateShopStaffLimit = async (req, res) => {
     const { maxStaffAllowed } = req.body;
 
     if (maxStaffAllowed === undefined || typeof maxStaffAllowed !== 'number' || maxStaffAllowed < 1) {
-      return res.status(400).json({ 
-        message: "Invalid value for maxStaffAllowed. Must be a number greater than 0." 
+      return res.status(400).json({
+        message: "Invalid value for maxStaffAllowed. Must be a number greater than 0."
       });
     }
 
@@ -354,11 +409,167 @@ exports.deleteShop = async (req, res) => {
 
     // Delete associated user account
     await User.deleteMany({ shopId: shop._id });
-    
+
+    // Delete all associated data
+    await Job.deleteMany({ shopId: shop._id });
+    await Staff.deleteMany({ shopId: shop._id });
+    await Expense.deleteMany({ shopId: shop._id });
+    await ShopOwner.deleteMany({ shopId: shop._id });
+
     // Delete the shop
     await Shop.findByIdAndDelete(req.params.id);
 
     res.status(200).json({ message: "Shop deleted successfully" });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ၈။ Financial Stats
+// @route   GET /api/admin/financial-stats
+// @access  Private (Super Admin)
+exports.getFinancialStats = async (req, res) => {
+  try {
+    const now = new Date();
+
+    // Fetch all shops to calculate historical revenue accurately
+    const allShops = await Shop.find();
+
+    // Fetch all subscription plans to get pricing
+    const plans = await SubscriptionPlan.find();
+
+    // Create a map of plan name to plan details
+    const planMap = {};
+    plans.forEach(plan => {
+      planMap[plan.name] = plan;
+      planMap[plan.name.toLowerCase()] = plan;
+    });
+
+    let yearlyRevenue = 0;
+    let monthlyRevenue = 0;
+    const revenueByPlanMap = {};
+
+    // For monthly trend (last 6 months)
+    const targetDate = new Date();
+    // Use targetMonth and targetYear from query, otherwise current Date in server timezone
+    const targetMonth = req.query.month ? parseInt(req.query.month) - 1 : targetDate.getMonth();
+    const targetYear = req.query.year ? parseInt(req.query.year) : targetDate.getFullYear();
+
+    const monthlyTrendMap = {};
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(targetYear, targetMonth - i, 1);
+      const monthKey = d.getFullYear() + '-' + d.getMonth();
+      const monthName = d.toLocaleString('en-US', { month: 'short' });
+      monthlyTrendMap[monthKey] = { monthName, total: 0, sortKey: d.getTime() };
+    }
+
+    // We calculate from precise boundaries
+    const monthStart = new Date(targetYear, targetMonth, 1);
+    const monthEnd = new Date(targetYear, targetMonth + 1, 1);
+
+    const yearStart = new Date(targetYear, 0, 1);
+    const yearEnd = new Date(targetYear + 1, 0, 1);
+
+    let activeSubscribers = 0;
+
+    allShops.forEach(shop => {
+      if (shop.isActive && new Date(shop.subscriptionExpire) > now) {
+        activeSubscribers++;
+      }
+
+      // Use a single property `subscriptionPlan` to link to Subscription Plans.
+      const planNameFallback = shop.subscriptionPlan || 'trial';
+      const plan = planMap[planNameFallback] || planMap[planNameFallback.toLowerCase()];
+
+      let shopValue = 0;
+
+      if (plan && plan.price > 0) {
+        shopValue = plan.price;
+      } else if (planNameFallback === 'monthly' || planNameFallback === 'yearly') {
+        // Fallback for legacy plans if missing in DB
+        shopValue = planNameFallback === 'monthly' ? 50000 : 500000;
+      }
+
+      // Gather all payments for this shop
+      const payments = [];
+      if (shop.paymentHistory && shop.paymentHistory.length > 0) {
+        payments.push(...shop.paymentHistory);
+      } else {
+        // Fallback for legacy shops without payment history
+        payments.push({
+          planName: plan ? plan.name : planNameFallback,
+          price: shopValue,
+          date: new Date(shop.subscriptionStart || shop.createdAt)
+        });
+      }
+
+      payments.forEach(payment => {
+        const payDate = new Date(payment.date);
+        let payVal = payment.price;
+
+        if (payVal === undefined || payVal === null) {
+          payVal = shopValue; // Fallback if price is missing in history
+        }
+
+        // Monthly Revenue check
+        if (payDate.getTime() >= monthStart.getTime() && payDate.getTime() < monthEnd.getTime()) {
+          monthlyRevenue += payVal;
+        }
+
+        // Yearly Revenue check
+        if (payDate.getTime() >= yearStart.getTime() && payDate.getTime() < yearEnd.getTime()) {
+          yearlyRevenue += payVal;
+        }
+
+        // Group by Plan
+        const pName = payment.planName || planNameFallback;
+        const displayPlanName = planMap[pName] ? planMap[pName].name : (pName.charAt(0).toUpperCase() + pName.slice(1));
+
+        if (!revenueByPlanMap[displayPlanName]) {
+          revenueByPlanMap[displayPlanName] = 0;
+        }
+        revenueByPlanMap[displayPlanName] += payVal;
+
+        // Trend check
+        const shopMonthKey = payDate.getFullYear() + '-' + payDate.getMonth();
+        if (monthlyTrendMap[shopMonthKey]) {
+          monthlyTrendMap[shopMonthKey].total += payVal;
+        }
+      });
+    });
+
+    // Convert revenueByPlanMap to percentage array
+    const revenueByPlan = [];
+    const totalAllTime = Object.values(revenueByPlanMap).reduce((a, b) => a + b, 0);
+
+    if (totalAllTime > 0) {
+      for (const [plan, amount] of Object.entries(revenueByPlanMap)) {
+        if (amount > 0) {
+          revenueByPlan.push({
+            plan,
+            percentage: Math.round((amount / totalAllTime) * 100)
+          });
+        }
+      }
+    }
+
+    // Sort by percentage descending
+    revenueByPlan.sort((a, b) => b.percentage - a.percentage);
+
+    const monthlyTrend = Object.values(monthlyTrendMap)
+      .sort((a, b) => a.sortKey - b.sortKey)
+      .map(item => ({
+        month: item.monthName,
+        total: item.total
+      }));
+
+    res.status(200).json({
+      yearlyRevenue: Math.round(yearlyRevenue),
+      monthlyRevenue: Math.round(monthlyRevenue),
+      activeSubscribers,
+      revenueByPlan,
+      monthlyTrend
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

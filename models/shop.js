@@ -21,13 +21,11 @@ const shopSchema = new mongoose.Schema(
     subscriptionExpire: { type: Date, required: true },
     subscriptionPlan: {
       type: String,
-      enum: ["monthly", "yearly", "trial"],
       default: "trial",
     },
     // New: Subscription Class for feature limits (decoupled from time duration)
     subscriptionClass: {
       type: String,
-      enum: ['Basic', 'Pro', 'ProMax'],
       default: 'Basic',
     },
     // Staff limit - can be overridden manually
@@ -36,6 +34,13 @@ const shopSchema = new mongoose.Schema(
       default: 1,
       min: 1,
     },
+    paymentHistory: [
+      {
+        planName: String,
+        price: Number,
+        date: { type: Date, default: Date.now },
+      },
+    ],
   },
   { timestamps: true },
 );
