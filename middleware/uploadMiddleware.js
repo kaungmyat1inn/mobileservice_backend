@@ -20,15 +20,19 @@ const storage = multer.diskStorage({
 });
 
 const fileFilter = (req, file, cb) => {
-    const allowedFileTypes = /jpeg|jpg|png|webp/;
+    const allowedFileTypes = /jpeg|jpg|png|webp|heic|heif/;
     const extname = allowedFileTypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = allowedFileTypes.test(file.mimetype);
+    const mimetype = (file.mimetype || '').toLowerCase();
+    const isImageMime = mimetype.startsWith('image/');
+    const allowedMime = allowedFileTypes.test(mimetype);
 
-    if (extname && mimetype) {
+    // Some Android devices return uncommon image mime types.
+    // Accept if either extension is valid or mime is a valid image type.
+    if (extname || isImageMime || allowedMime) {
         return cb(null, true);
-    } else {
-        cb('Error: Images Only!');
     }
+
+    cb(new Error('Only image files are allowed (jpg, png, webp, heic, heif).'));
 };
 
 const upload = multer({

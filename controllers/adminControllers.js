@@ -1,8 +1,10 @@
 const Shop = require("../models/shop");
 const User = require("../models/user");
+const bcrypt = require("bcryptjs");
 const Job = require("../models/Job");
 const ShopOwner = require("../models/ShopOwner");
 const SubscriptionPlan = require("../models/SubscriptionPlan");
+const InvoiceVoucher = require("../models/InvoiceVoucher");
 const Staff = require("../models/Staff");
 const Expense = require("../models/Expense");
 const { SUBSCRIPTION_CLASSES } = require("../models/shop");
@@ -11,6 +13,21 @@ const {
   generateOwnerToken,
   generateOwnerQrPayload,
 } = require("../services/qrService");
+
+const escapeRegex = (value = "") =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const buildVoucherNo = (prefix = "INV") => {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const h = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+  const s = String(d.getSeconds()).padStart(2, "0");
+  const ms = String(d.getMilliseconds()).padStart(3, "0");
+  return `${prefix}-${y}${m}${day}-${h}${min}${s}${ms}`;
+};
 
 // Helper function to calculate subscription expiry date
 const calculateSubscriptionExpire = (plan, startDate = new Date()) => {
@@ -55,6 +72,7 @@ exports.createShop = async (req, res) => {
     } = req.body;
 
     let planName = subscriptionPlan || "trial";
+    let selectedPlan = null;
     let startDate = subscriptionStart ? new Date(subscriptionStart) : new Date();
     let expireDate;
 
@@ -64,33 +82,51 @@ exports.createShop = async (req, res) => {
     // If subscriptionPlanId is provided, look up the plan for duration
     // Handle both MongoDB ObjectId and string IDs like "monthly", "yearly", "trial"
     if (subscriptionPlanId) {
-      let plan = null;
-
       // Check if it's a valid MongoDB ObjectId (24 character hex string)
       const isValidObjectId = /^[0-9a-fA-F]{24}$/.test(subscriptionPlanId);
 
       if (isValidObjectId) {
         // It's a valid ObjectId, try to find by ID
-        plan = await SubscriptionPlan.findById(subscriptionPlanId);
+        selectedPlan = await SubscriptionPlan.findById(subscriptionPlanId);
       } else {
         // It's a string ID like "monthly", "yearly", "trial", try to find by name
         // First letter uppercase to match seeded data
         const planName = subscriptionPlanId.charAt(0).toUpperCase() + subscriptionPlanId.slice(1).toLowerCase();
-        plan = await SubscriptionPlan.findOne({ name: planName });
+        selectedPlan = await SubscriptionPlan.findOne({ name: planName });
       }
 
-      if (plan) {
-        planName = plan.name;
+      if (selectedPlan) {
+        planName = selectedPlan.name;
         expireDate = new Date(startDate);
-        expireDate.setDate(expireDate.getDate() + plan.durationDays);
+        expireDate.setDate(expireDate.getDate() + selectedPlan.durationDays);
 
         // Use plan's maxStaffAllowed if not explicitly provided
         if (!explicitMaxStaff) {
-          finalMaxStaff = plan.maxStaffAllowed;
+          finalMaxStaff = selectedPlan.maxStaffAllowed;
         }
       } else {
         // Plan not found, use default calculation
         expireDate = calculateSubscriptionExpire(planName, startDate);
+      }
+    } else if (subscriptionPlan) {
+      // New flow: Flutter sends plan name (e.g., "Basic", "Pro", ...)
+      selectedPlan = await SubscriptionPlan.findOne({
+        name: { $regex: `^${escapeRegex(subscriptionPlan)}$`, $options: "i" },
+      });
+
+      if (selectedPlan) {
+        planName = selectedPlan.name;
+        expireDate = subscriptionExpire
+          ? new Date(subscriptionExpire)
+          : new Date(startDate.getTime() + selectedPlan.durationDays * 24 * 60 * 60 * 1000);
+        if (!explicitMaxStaff) {
+          finalMaxStaff = selectedPlan.maxStaffAllowed;
+        }
+      } else {
+        // Unknown custom plan name, keep legacy fallback behavior
+        expireDate = subscriptionExpire
+          ? new Date(subscriptionExpire)
+          : calculateSubscriptionExpire(planName, startDate);
       }
     } else {
       // Use legacy plan name calculation
@@ -108,7 +144,10 @@ exports.createShop = async (req, res) => {
     });
 
     // Add initial payment record
-    const initialPrice = plan ? plan.price : (planName === 'yearly' ? 500000 : (planName === 'monthly' ? 50000 : 0));
+    const normalizedPlan = (planName || "").toLowerCase();
+    const initialPrice = selectedPlan
+      ? selectedPlan.price
+      : (normalizedPlan === "yearly" ? 500000 : (normalizedPlan === "monthly" ? 50000 : 0));
     shop.paymentHistory.push({
       planName: planName,
       price: initialPrice,
@@ -116,6 +155,19 @@ exports.createShop = async (req, res) => {
     });
 
     await shop.save();
+
+    const createVoucher = await InvoiceVoucher.create({
+      voucherNo: buildVoucherNo("SHP"),
+      shopId: shop._id,
+      type: "CREATE",
+      planName: planName,
+      amount: initialPrice,
+      periodStart: startDate,
+      periodEnd: expireDate,
+      issuedAt: startDate,
+      createdBy: req.user?._id || null,
+      notes: "Initial subscription voucher generated on shop creation.",
+    });
 
     // Create user account for the shop
     // Pass raw password - let User model's pre-save hook handle hashing
@@ -130,7 +182,11 @@ exports.createShop = async (req, res) => {
       await user.save();
     }
 
-    res.status(201).json({ message: "Shop Created Successfully", shop });
+    res.status(201).json({
+      message: "Shop Created Successfully",
+      shop,
+      invoiceVoucher: createVoucher,
+    });
   } catch (error) {
     res.status(400).json({ message: error.message });
   }
@@ -299,7 +355,24 @@ exports.extendShopSubscription = async (req, res) => {
 
     await shop.save();
 
-    res.status(200).json({ message: "Shop subscription extended successfully", shop });
+    const extensionVoucher = await InvoiceVoucher.create({
+      voucherNo: buildVoucherNo("EXT"),
+      shopId: shop._id,
+      type: "EXTEND",
+      planName: plan.name,
+      amount: plan.price,
+      periodStart: startDateForExtension,
+      periodEnd: newExpire,
+      issuedAt: now,
+      createdBy: req.user?._id || null,
+      notes: "Subscription extension voucher generated.",
+    });
+
+    res.status(200).json({
+      message: "Shop subscription extended successfully",
+      shop,
+      invoiceVoucher: extensionVoucher,
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -328,6 +401,52 @@ exports.updateShopPassword = async (req, res) => {
     res.status(200).json({ message: "Password updated successfully" });
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+};
+
+// ၄-၁။ ဆိုင်အက်မင် PIN ပြင်ဆင်ခြင်း
+exports.updateShopPin = async (req, res) => {
+  try {
+    const { newPin } = req.body;
+
+    if (!/^\d{6}$/.test(String(newPin || ""))) {
+      return res.status(400).json({ message: "New PIN must be exactly 6 digits" });
+    }
+
+    const shop = await Shop.findById(req.params.id);
+
+    if (!shop) {
+      return res.status(404).json({ message: "Shop not found" });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    shop.securityPinHash = await bcrypt.hash(String(newPin), salt);
+    await shop.save();
+
+    res.status(200).json({ message: "PIN updated successfully" });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ၄-၂။ Get latest invoice voucher for a shop
+exports.getLatestShopInvoice = async (req, res) => {
+  try {
+    const shop = await Shop.findById(req.params.id);
+    if (!shop) {
+      return res.status(404).json({ message: "Shop not found" });
+    }
+
+    const invoiceVoucher = await InvoiceVoucher.findOne({ shopId: shop._id })
+      .sort({ issuedAt: -1, createdAt: -1 });
+
+    if (!invoiceVoucher) {
+      return res.status(404).json({ message: "No invoice voucher found for this shop" });
+    }
+
+    return res.status(200).json({ invoiceVoucher });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
   }
 };
 
@@ -445,6 +564,16 @@ exports.getFinancialStats = async (req, res) => {
       planMap[plan.name.toLowerCase()] = plan;
     });
 
+    const resolvePlanPrice = (rawPlanName, fallback = 0) => {
+      const key = (rawPlanName || "").toString();
+      const lower = key.toLowerCase();
+      const linkedPlan = planMap[key] || planMap[lower];
+      if (linkedPlan && linkedPlan.price > 0) return linkedPlan.price;
+      if (lower === "monthly") return 50000;
+      if (lower === "yearly") return 500000;
+      return fallback;
+    };
+
     let yearlyRevenue = 0;
     let monthlyRevenue = 0;
     const revenueByPlanMap = {};
@@ -483,12 +612,7 @@ exports.getFinancialStats = async (req, res) => {
 
       let shopValue = 0;
 
-      if (plan && plan.price > 0) {
-        shopValue = plan.price;
-      } else if (planNameFallback === 'monthly' || planNameFallback === 'yearly') {
-        // Fallback for legacy plans if missing in DB
-        shopValue = planNameFallback === 'monthly' ? 50000 : 500000;
-      }
+      shopValue = resolvePlanPrice(planNameFallback, 0);
 
       // Gather all payments for this shop
       const payments = [];
@@ -507,8 +631,9 @@ exports.getFinancialStats = async (req, res) => {
         const payDate = new Date(payment.date);
         let payVal = payment.price;
 
-        if (payVal === undefined || payVal === null) {
-          payVal = shopValue; // Fallback if price is missing in history
+        if (payVal === undefined || payVal === null || Number(payVal) <= 0) {
+          // Recover from old/bad records that stored 0 for paid plans.
+          payVal = resolvePlanPrice(payment.planName || planNameFallback, shopValue);
         }
 
         // Monthly Revenue check
@@ -571,6 +696,7 @@ exports.getFinancialStats = async (req, res) => {
       monthlyTrend
     });
   } catch (error) {
+    console.error("getFinancialStats error:", error);
     res.status(500).json({ message: error.message });
   }
 };

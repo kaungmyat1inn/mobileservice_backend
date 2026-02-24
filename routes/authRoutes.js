@@ -8,6 +8,8 @@ const {
   registerValidation,
   updateUserProfileValidation,
   updateUserPasswordValidation,
+  verifyPinValidation,
+  updateSecurityPinValidation,
   forgotPasswordValidation,
   resetPasswordValidation,
 } = require("../middleware/validationMiddleware");
@@ -26,6 +28,18 @@ router.put(
   protect,
   upload.single("logo"),
   authController.uploadShopLogo
+);
+router.put(
+  "/profile/pin",
+  protect,
+  updateSecurityPinValidation,
+  authController.updateSecurityPin,
+);
+router.post(
+  "/verify-pin",
+  protect,
+  verifyPinValidation,
+  authController.verifySecurityPin,
 );
 router.put(
   "/password",

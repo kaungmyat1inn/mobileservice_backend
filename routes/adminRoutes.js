@@ -21,6 +21,18 @@ router.put(
   checkSuperAdmin,
   adminController.updateShopPassword,
 );
+router.put(
+  "/shops/:id/pin",
+  protect,
+  checkSuperAdmin,
+  adminController.updateShopPin,
+);
+router.get(
+  "/shops/:id/invoices/latest",
+  protect,
+  checkSuperAdmin,
+  adminController.getLatestShopInvoice,
+);
 router.post(
   "/shops/:id/extend",
   protect,

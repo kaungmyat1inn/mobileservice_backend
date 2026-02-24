@@ -1,9 +1,11 @@
 const User = require("../models/user");
 const Shop = require("../models/shop");
+const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const path = require("path");
 const fs = require("fs");
+const DEFAULT_SECURITY_PIN = "123456";
 
 const generateToken = (user) => {
   return jwt.sign(
@@ -17,6 +19,18 @@ const generateToken = (user) => {
     process.env.JWT_SECRET,
     {}
   );
+};
+
+const verifyShopPin = async (shop, pin) => {
+  if (!shop.securityPinHash) {
+    return pin === DEFAULT_SECURITY_PIN;
+  }
+  return bcrypt.compare(pin, shop.securityPinHash);
+};
+
+const setShopPin = async (shop, pin) => {
+  const salt = await bcrypt.genSalt(10);
+  shop.securityPinHash = await bcrypt.hash(pin, salt);
 };
 
 // User အသစ် Register လုပ်ခြင်း
@@ -120,6 +134,7 @@ exports.loginUser = async (req, res) => {
               maxStaffAllowed: shop.maxStaffAllowed,
               logoUrl: shop.logoUrl,
               customRule: shop.customRule,
+              registrationDate: shop.createdAt,
             },
           });
           return;
@@ -143,6 +158,7 @@ exports.loginUser = async (req, res) => {
           maxStaffAllowed: null,
           logoUrl: null,
           customRule: null,
+          registrationDate: user.createdAt,
         },
       });
     } else {
@@ -240,6 +256,7 @@ exports.getUserProfile = async (req, res) => {
       maxStaffAllowed: null,
       logoUrl: null,
       customRule: null,
+      registrationDate: null,
     };
 
     if (!user.isSuperAdmin && user.shopId) {
@@ -256,6 +273,7 @@ exports.getUserProfile = async (req, res) => {
           maxStaffAllowed: shop.maxStaffAllowed,
           logoUrl: shop.logoUrl,
           customRule: shop.customRule,
+          registrationDate: shop.createdAt,
         };
       }
     }
@@ -276,7 +294,7 @@ exports.getUserProfile = async (req, res) => {
 // @route   PUT /api/auth/profile
 // @access  Private
 exports.updateUserProfile = async (req, res) => {
-  const { email, customRule } = req.body;
+  const { email, customRule, shopName, phone, shopAddress } = req.body;
 
   try {
     const user = await User.findById(req.user._id);
@@ -285,13 +303,15 @@ exports.updateUserProfile = async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // Check if email is being changed and if it already exists
-    if (email && email !== user.email) {
-      const emailExists = await User.findOne({ email });
-      if (emailExists) {
-        return res.status(400).json({ message: "Email already in use" });
+    if (user.isSuperAdmin) {
+      // Keep existing behavior for super admin account updates.
+      if (email && email !== user.email) {
+        const emailExists = await User.findOne({ email });
+        if (emailExists) {
+          return res.status(400).json({ message: "Email already in use" });
+        }
+        user.email = email;
       }
-      user.email = email;
     }
 
     const updatedUser = await user.save();
@@ -307,15 +327,25 @@ exports.updateUserProfile = async (req, res) => {
       maxStaffAllowed: null,
       logoUrl: null,
       customRule: null,
+      registrationDate: null,
     };
 
     if (!updatedUser.isSuperAdmin && updatedUser.shopId) {
       const shop = await Shop.findById(updatedUser.shopId);
       if (shop) {
+        if (shopName !== undefined) {
+          shop.shopName = shopName;
+        }
+        if (phone !== undefined) {
+          shop.phone = phone;
+        }
+        if (shopAddress !== undefined) {
+          shop.address = shopAddress;
+        }
         if (customRule !== undefined) {
           shop.customRule = customRule;
-          await shop.save();
         }
+        await shop.save();
 
         shopData = {
           shopName: shop.shopName,
@@ -328,6 +358,7 @@ exports.updateUserProfile = async (req, res) => {
           maxStaffAllowed: shop.maxStaffAllowed,
           logoUrl: shop.logoUrl,
           customRule: shop.customRule,
+          registrationDate: shop.createdAt,
         };
       }
     }
@@ -369,6 +400,71 @@ exports.updateUserPassword = async (req, res) => {
     res.status(200).json({ message: "Password updated successfully" });
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc    Verify security PIN for protected sections
+// @route   POST /api/auth/verify-pin
+// @access  Private
+exports.verifySecurityPin = async (req, res) => {
+  const { pin } = req.body;
+
+  try {
+    const user = await User.findById(req.user._id);
+    if (!user || user.isSuperAdmin || !user.shopId) {
+      return res.status(404).json({ message: "Shop not found" });
+    }
+
+    const shop = await Shop.findById(user.shopId);
+    if (!shop) {
+      return res.status(404).json({ message: "Shop not found" });
+    }
+
+    const isValid = await verifyShopPin(shop, pin);
+    if (!isValid) {
+      return res.status(401).json({ message: "Invalid PIN" });
+    }
+
+    // Migrate from implicit default PIN to stored hash when verified first time.
+    if (!shop.securityPinHash && pin === DEFAULT_SECURITY_PIN) {
+      await setShopPin(shop, pin);
+      await shop.save();
+    }
+
+    return res.status(200).json({ valid: true });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc    Update security PIN for protected sections
+// @route   PUT /api/auth/profile/pin
+// @access  Private
+exports.updateSecurityPin = async (req, res) => {
+  const { currentPin, newPin } = req.body;
+
+  try {
+    const user = await User.findById(req.user._id);
+    if (!user || user.isSuperAdmin || !user.shopId) {
+      return res.status(404).json({ message: "Shop not found" });
+    }
+
+    const shop = await Shop.findById(user.shopId);
+    if (!shop) {
+      return res.status(404).json({ message: "Shop not found" });
+    }
+
+    const isValidCurrentPin = await verifyShopPin(shop, currentPin);
+    if (!isValidCurrentPin) {
+      return res.status(401).json({ message: "Current PIN is incorrect" });
+    }
+
+    await setShopPin(shop, newPin);
+    await shop.save();
+
+    return res.status(200).json({ message: "PIN updated successfully" });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
   }
 };
 // @desc    Upload shop logo

@@ -1,8 +1,22 @@
 const errorHandler = (err, req, res, next) => {
-  const statusCode = res.statusCode === 200 ? 500 : res.statusCode;
+  let statusCode = res.statusCode === 200 ? 500 : res.statusCode;
+
+  if (err?.name === "MulterError") {
+    statusCode = 400;
+  }
+
+  if (typeof err === "string") {
+    statusCode = 400;
+  }
+
+  const message =
+    typeof err === "string"
+      ? err
+      : err?.message || "Unexpected server error";
+
   res.status(statusCode);
   res.json({
-    message: err.message,
+    message,
     stack: process.env.NODE_ENV === "production" ? null : err.stack,
   });
 };

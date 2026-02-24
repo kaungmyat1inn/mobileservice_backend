@@ -98,8 +98,9 @@ const createJob = async (req, res) => {
     // Generate a unique job number (e.g., MSG-timestamp)
     const jobNo = `#${Date.now()}`;
 
-    // Calculate total amount (partsCost + serviceFee + reserves)
-    const totalAmount = Number(partsCost || 0) + Number(serviceFee || 0) + Number(reserves || 0);
+    // Calculate total amount (partsCost + serviceFee - reserves)
+    const totalAmount =
+      Number(partsCost || 0) + Number(serviceFee || 0) - Number(reserves || 0);
 
     const newJob = new Job({
       jobNo,
@@ -375,7 +376,8 @@ const updateJob = async (req, res) => {
 
     // Recalculate total amount if partsCost, serviceFee or reserves changed
     if (partsCost !== undefined || serviceFee !== undefined || reserves !== undefined) {
-      job.totalAmount = Number(job.partsCost || 0) + Number(job.serviceFee || 0) + Number(job.reserves || 0);
+      job.totalAmount =
+        Number(job.partsCost || 0) + Number(job.serviceFee || 0) - Number(job.reserves || 0);
     }
 
     const updatedJob = await job.save();

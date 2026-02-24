@@ -14,6 +14,7 @@ const shopSchema = new mongoose.Schema(
     phone: { type: String, required: true, unique: true },
     email: { type: String, required: true, unique: true },
     address: String,
+    securityPinHash: { type: String, default: null },
     logoUrl: { type: String, default: null }, // Shop Logo URL
     customRule: { type: String, default: '' }, // Custom Rule for printing
     isActive: { type: Boolean, default: true },

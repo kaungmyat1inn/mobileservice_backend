@@ -105,9 +105,24 @@ const updateUserProfileValidation = [
     .optional()
     .isEmail()
     .withMessage("Please enter a valid email address"),
+  body("shopName")
+    .optional()
+    .isString()
+    .isLength({ min: 1 })
+    .withMessage("Shop name cannot be empty"),
+  body("phone")
+    .optional()
+    .isString()
+    .isLength({ min: 1 })
+    .withMessage("Phone cannot be empty"),
+  body("shopAddress")
+    .optional()
+    .isString()
+    .withMessage("Address must be a string"),
   body("customRule")
     .optional()
-    .isString(),
+    .isString()
+    .withMessage("Custom rule must be a string"),
   validate,
 ];
 
@@ -118,6 +133,23 @@ const updateUserPasswordValidation = [
   body("newPassword")
     .isLength({ min: 6 })
     .withMessage("New password must be at least 6 characters long"),
+  validate,
+];
+
+const verifyPinValidation = [
+  body("pin")
+    .matches(/^\d{6}$/)
+    .withMessage("PIN must be exactly 6 digits"),
+  validate,
+];
+
+const updateSecurityPinValidation = [
+  body("currentPin")
+    .matches(/^\d{6}$/)
+    .withMessage("Current PIN must be exactly 6 digits"),
+  body("newPin")
+    .matches(/^\d{6}$/)
+    .withMessage("New PIN must be exactly 6 digits"),
   validate,
 ];
 
@@ -140,6 +172,8 @@ module.exports = {
   createExpenseValidation,
   updateUserProfileValidation,
   updateUserPasswordValidation,
+  verifyPinValidation,
+  updateSecurityPinValidation,
   forgotPasswordValidation,
   resetPasswordValidation,
   validate, // Export generic validator for other uses if needed
