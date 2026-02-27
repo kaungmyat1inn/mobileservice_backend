@@ -35,12 +35,12 @@ const buildReceiptText = ({ job, shop }) => {
     `Device: ${job.deviceModel}`,
     `Issue: ${job.issue}`,
     "------------------------------",
-    `Parts: ${formatAmount(job.partsCost)}`,
-    `Service: ${formatAmount(job.serviceFee)}`,
-    `Total: ${formatAmount(job.totalAmount)}`,
+    `ပစ္စည်းဖိုး: ${formatAmount(job.partsCost)}`,
+    `ဆားဗစ်ခ: ${formatAmount(job.serviceFee)}`,
+    `စရံငွေ: ${formatAmount(job.reserves)}`,
+    `ကျသင့်ငွေ: ${formatAmount(job.totalAmount)}`,
     `Status: ${job.status}`,
     "------------------------------",
-    "Thank you.",
   ].filter(Boolean);
 
   return lines.join("\n");
@@ -143,15 +143,15 @@ const notifyJobStatusChange = async (job) => {
     );
     return;
   }
-  await sendMessage(
-    job.customer_chat_id,
-    `မိတ်ဆွေရဲ့ဖုန်းကို စတင်ပြင်ဆင်နေပါပြီ။\n${receipt}`,
-  );
 };
 
 const sendDailyReports = async () => {
   const today = new Date();
-  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const start = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate(),
+  );
   const end = new Date(
     today.getFullYear(),
     today.getMonth(),
@@ -173,7 +173,7 @@ const sendDailyReports = async () => {
     const income = jobs.reduce((sum, j) => sum + (j.totalAmount || 0), 0);
     const pendingJobs = jobs.filter((j) => j.status !== "complete").length;
 
-    const msg = `နေ့စဉ်အစီရင်ခံစာ\nစုစုပေါင်းအလုပ်: ${totalJobs}\nဝင်ငွေ: ${income}\nမပြီးသေးသောအလုပ်: ${pendingJobs}`;
+    const msg = `နေ့စဉ်အစီရင်ခံစာ\nTotalJobs: ${totalJobs}\nIncome: ${income}`;
     await sendMessage(owner.telegram_chat_id, msg);
   }
 };

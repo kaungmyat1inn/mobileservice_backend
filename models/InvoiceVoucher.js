@@ -24,6 +24,11 @@ const invoiceVoucherSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    maxStaffs: {
+      type: Number,
+      required: true,
+      default: 1,
+    },
     amount: {
       type: Number,
       required: true,

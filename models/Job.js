@@ -191,4 +191,6 @@ jobSchema.pre("save", function ensureInitialTimeline() {
   }
 });
 
+jobSchema.index({ shopId: 1, createdAt: -1 });
+
 module.exports = mongoose.model("Job", jobSchema);

@@ -161,6 +161,7 @@ exports.createShop = async (req, res) => {
       shopId: shop._id,
       type: "CREATE",
       planName: planName,
+      maxStaffs: finalMaxStaff,
       amount: initialPrice,
       periodStart: startDate,
       periodEnd: expireDate,
@@ -196,17 +197,23 @@ exports.createShop = async (req, res) => {
 exports.getAllShops = async (req, res) => {
   try {
     const shops = await Shop.find();
+    const shopIds = shops.map((shop) => shop._id);
 
-    // Get job counts for each shop
-    const shopsWithJobCounts = await Promise.all(
-      shops.map(async (shop) => {
-        const jobCount = await Job.countDocuments({ shopId: shop._id });
-        return {
-          ...shop.toObject(),
-          jobCount,
-        };
-      })
-    );
+    // Single aggregation query instead of N+1 countDocuments calls.
+    const jobCounts = await Job.aggregate([
+      { $match: { shopId: { $in: shopIds } } },
+      { $group: { _id: "$shopId", count: { $sum: 1 } } },
+    ]);
+
+    const jobCountMap = {};
+    for (const item of jobCounts) {
+      jobCountMap[item._id.toString()] = item.count;
+    }
+
+    const shopsWithJobCounts = shops.map((shop) => ({
+      ...shop.toObject(),
+      jobCount: jobCountMap[shop._id.toString()] ?? 0,
+    }));
 
     res.status(200).json(shopsWithJobCounts);
   } catch (error) {
@@ -234,6 +241,32 @@ exports.getAllUsers = async (req, res) => {
       currentPage: page,
       totalPages: Math.ceil(totalUsers / limit),
       totalUsers,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ၂-၁-၁။ Staff အားလုံး စာရင်းကို ကြည့်ခြင်း (Super Admin Only)
+exports.getAllStaff = async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 200;
+    const skip = (page - 1) * limit;
+
+    const staff = await Staff.find()
+      .populate("shopId", "shopName")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const totalStaff = await Staff.countDocuments();
+
+    res.status(200).json({
+      staff,
+      currentPage: page,
+      totalPages: Math.ceil(totalStaff / limit),
+      totalStaff,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -360,6 +393,7 @@ exports.extendShopSubscription = async (req, res) => {
       shopId: shop._id,
       type: "EXTEND",
       planName: plan.name,
+      maxStaffs: plan.maxStaffAllowed,
       amount: plan.price,
       periodStart: startDateForExtension,
       periodEnd: newExpire,

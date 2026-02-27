@@ -8,6 +8,7 @@ const { protect, checkSuperAdmin } = require("../middleware/authMiddleware");
 router.post("/shops", protect, checkSuperAdmin, adminController.createShop);
 router.get("/shops", protect, checkSuperAdmin, adminController.getAllShops);
 router.get("/users", protect, checkSuperAdmin, adminController.getAllUsers);
+router.get("/staff", protect, checkSuperAdmin, adminController.getAllStaff);
 router.get("/jobs", protect, checkSuperAdmin, adminController.getAllJobs);
 router.put(
   "/shops/:id",
