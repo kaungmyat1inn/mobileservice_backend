@@ -93,6 +93,7 @@ const createJob = async (req, res) => {
     partsCost,
     serviceFee,
     reserves,
+    assignedTechnician,
   } = req.body;
 
   try {
@@ -117,6 +118,7 @@ const createJob = async (req, res) => {
       reserves: reserves || 0,
       totalAmount,
       status: "pending",
+      assignedTechnician: assignedTechnician || null,
     });
     appendTimeline(newJob, "pending");
     appendStatusLog(newJob, req, null, newJob.status, "create");
@@ -127,6 +129,7 @@ const createJob = async (req, res) => {
     if (issue) addSuggestion('issue', issue);
 
     const savedJob = await newJob.save();
+    await savedJob.populate("assignedTechnician", "name role");
     res.status(201).json(savedJob);
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
@@ -167,6 +170,7 @@ const getMyShopJobs = async (req, res) => {
 
   try {
     const jobs = await Job.find(query)
+      .populate("assignedTechnician", "name role")
       .skip(skip)
       .limit(limit)
       .sort({ createdAt: -1 }); // Sort by newest first
@@ -287,7 +291,7 @@ const getJobById = async (req, res) => {
   }
 
   try {
-    const job = await Job.findById(req.params.id);
+    const job = await Job.findById(req.params.id).populate("assignedTechnician", "name role");
 
     if (!job) {
       return res.status(404).json({ message: "Job not found" });
@@ -396,6 +400,7 @@ const updateJob = async (req, res) => {
     }
 
     const updatedJob = await job.save();
+    await updatedJob.populate("assignedTechnician", "name role");
     if (previousStatus && previousStatus !== updatedJob.status) {
       notifyJobStatusChange(updatedJob).catch((err) =>
         console.error("Telegram notify error:", err),
@@ -446,6 +451,7 @@ const checkoutJob = async (req, res) => {
     job.status = "checked_out";
 
     const updatedJob = await job.save();
+    await updatedJob.populate("assignedTechnician", "name role");
     res.status(200).json(updatedJob);
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
