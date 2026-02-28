@@ -1,5 +1,6 @@
 const Job = require("../models/Job");
 const Expense = require("../models/Expense");
+const { addSuggestion } = require("./suggestionControllers");
 const { notifyJobStatusChange } = require("../services/telegramBot");
 const { buildQrLink, generateJobQrPayload } = require("../services/qrService");
 
@@ -119,6 +120,11 @@ const createJob = async (req, res) => {
     });
     appendTimeline(newJob, "pending");
     appendStatusLog(newJob, req, null, newJob.status, "create");
+
+    // Add suggestions dynamically
+    if (deviceModel) addSuggestion('model', deviceModel);
+    if (color) addSuggestion('color', color);
+    if (issue) addSuggestion('issue', issue);
 
     const savedJob = await newJob.save();
     res.status(201).json(savedJob);
@@ -353,10 +359,19 @@ const updateJob = async (req, res) => {
 
     if (customerName) job.customerName = customerName;
     if (customerPhone) job.customerPhone = customerPhone;
-    if (deviceModel) job.deviceModel = deviceModel;
+    if (deviceModel) {
+      job.deviceModel = deviceModel;
+      addSuggestion('model', deviceModel);
+    }
     if (imeiOrSn !== undefined) job.imeiOrSn = imeiOrSn;
-    if (color !== undefined) job.color = color;
-    if (issue) job.issue = issue;
+    if (color !== undefined) {
+      job.color = color;
+      if (color) addSuggestion('color', color);
+    }
+    if (issue) {
+      job.issue = issue;
+      addSuggestion('issue', issue);
+    }
     if (partsCost !== undefined) job.partsCost = partsCost;
     if (serviceFee !== undefined) job.serviceFee = serviceFee;
     if (reserves !== undefined) job.reserves = reserves;

@@ -7,6 +7,7 @@ const expenseRoutes = require("./routes/expenseRoutes");
 const authRoutes = require("./routes/authRoutes");
 const adminRoutes = require("./routes/adminRoutes");
 const staffRoutes = require("./routes/staffRoutes");
+const suggestionRoutes = require("./routes/suggestionRoutes");
 const { notFound, errorHandler } = require("./middleware/errorMiddleware");
 const { startBot } = require("./services/telegramBot");
 const path = require("path");
@@ -57,6 +58,7 @@ app.get(`${BASE_PATH}/api`, (req, res) => {
       jobs: `${BASE_PATH}/api/jobs`,
       expenses: `${BASE_PATH}/api/expenses`,
       admin: `${BASE_PATH}/api/admin`,
+      suggestions: `${BASE_PATH}/api/suggestions`,
       health: `${BASE_PATH}/api/health`,
     },
     timestamp: new Date()
@@ -74,6 +76,7 @@ app.use(`${BASE_PATH}/api/expenses`, expenseRoutes);
 app.use(`${BASE_PATH}/api/auth`, authRoutes);
 app.use(`${BASE_PATH}/api/admin`, adminRoutes);
 app.use(`${BASE_PATH}/api/staff`, staffRoutes);
+app.use(`${BASE_PATH}/api/suggestions`, suggestionRoutes);
 
 // Static uploads directory
 app.use(`${BASE_PATH}/api/uploads`, express.static(path.join(__dirname, 'uploads')));
