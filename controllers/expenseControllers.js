@@ -38,8 +38,21 @@ const getMyShopExpenses = async (req, res) => {
   }
 
   try {
-    const limit = parseInt(req.query.limit, 10) || 50;
-    const expenses = await Expense.find({ shopId: req.user.shopId })
+    let limit = parseInt(req.query.limit, 10);
+    const query = { shopId: req.user.shopId };
+
+    if (req.query.startDate && req.query.endDate) {
+      query.expenseDate = {
+        $gte: new Date(req.query.startDate),
+        $lt: new Date(req.query.endDate),
+      };
+      // when filtering by explicit date range, default to bringing all records matching it
+      if (!req.query.limit) limit = 1000;
+    } else {
+      if (!req.query.limit) limit = 50;
+    }
+
+    const expenses = await Expense.find(query)
       .sort({ expenseDate: -1, createdAt: -1 })
       .limit(limit);
 
