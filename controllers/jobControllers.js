@@ -206,27 +206,57 @@ const getShopReport = async (req, res) => {
     const jobReport = await Job.aggregate([
       {
         $match: {
-          shopId: shopId,
-          isLocked: true,
-          checkoutDate: { $gte: start, $lt: end },
+          shopId: shopId, // get all jobs for the shop in this period regardless of checkout or isLocked
+          // Depending on requirements, we can use `createdAt` to match the period for "All Jobs", 
+          // but total amounts usually reflect `createdAt` or `checkoutDate` based on your business logic.
+          // Using `createdAt` since we want a snapshot of jobs *created* or *updated* in this period.
+          // We will use `createdAt` here as the primary date filter for jobs.
+          createdAt: { $gte: start, $lt: end },
         },
       },
       {
         $group: {
-          _id: null, // Group all matching documents into a single result
-          totalPartsCost: { $sum: "$partsCost" },
-          totalServiceFee: { $sum: "$serviceFee" },
-          totalReserves: { $sum: "$reserves" },
-          totalJobs: { $sum: 1 }, // Count the number of jobs
+          _id: null,
+          totalPartsCost: {
+            $sum: { $cond: [{ $eq: ["$isLocked", true] }, "$partsCost", 0] }
+          },
+          totalServiceFee: {
+            $sum: { $cond: [{ $eq: ["$isLocked", true] }, "$serviceFee", 0] }
+          },
+          totalReserves: {
+            $sum: { $cond: [{ $eq: ["$isLocked", true] }, "$reserves", 0] }
+          },
+          totalJobs: { $sum: 1 },
+          // Group jobs by status counts
+          pendingCount: {
+            $sum: { $cond: [{ $eq: ["$status", "pending"] }, 1, 0] }
+          },
+          progressCount: {
+            $sum: { $cond: [{ $eq: ["$status", "progress"] }, 1, 0] }
+          },
+          completeCount: {
+            $sum: { $cond: [{ $eq: ["$status", "complete"] }, 1, 0] }
+          },
+          cancelCount: {
+            $sum: { $cond: [{ $eq: ["$status", "cancel"] }, 1, 0] }
+          },
+          checkedOutCount: {
+            $sum: { $cond: [{ $eq: ["$status", "checked_out"] }, 1, 0] }
+          },
         },
       },
       {
         $project: {
-          _id: 0, // Exclude the _id field from the final output
+          _id: 0,
           totalPartsCost: 1,
           totalServiceFee: 1,
           totalReserves: 1,
           totalJobs: 1,
+          pendingCount: 1,
+          progressCount: 1,
+          completeCount: 1,
+          cancelCount: 1,
+          checkedOutCount: 1,
         },
       },
     ]);
@@ -257,6 +287,11 @@ const getShopReport = async (req, res) => {
       totalServiceFee: 0,
       totalReserves: 0,
       totalJobs: 0,
+      pendingCount: 0,
+      progressCount: 0,
+      completeCount: 0,
+      cancelCount: 0,
+      checkedOutCount: 0,
     };
     const totalExpense = expenseReport[0]?.totalExpense || 0;
     const totalProfit =
@@ -274,6 +309,11 @@ const getShopReport = async (req, res) => {
       totalExpense,
       totalProfit,
       totalJobs: jobTotals.totalJobs,
+      pendingCount: jobTotals.pendingCount,
+      progressCount: jobTotals.progressCount,
+      completeCount: jobTotals.completeCount,
+      cancelCount: jobTotals.cancelCount,
+      checkedOutCount: jobTotals.checkedOutCount,
     });
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
