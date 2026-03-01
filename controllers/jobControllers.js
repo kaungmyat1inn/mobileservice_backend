@@ -13,6 +13,13 @@ const ALLOWED_JOB_STATUSES = [
 ];
 
 const getPeriodRange = (period, query = {}) => {
+  if (query.startDate && query.endDate) {
+    return {
+      start: new Date(query.startDate),
+      end: new Date(query.endDate),
+    };
+  }
+
   const now = new Date();
   let start;
   let end;
@@ -206,42 +213,44 @@ const getShopReport = async (req, res) => {
     const jobReport = await Job.aggregate([
       {
         $match: {
-          shopId: shopId, // get all jobs for the shop in this period regardless of checkout or isLocked
-          // Depending on requirements, we can use `createdAt` to match the period for "All Jobs", 
-          // but total amounts usually reflect `createdAt` or `checkoutDate` based on your business logic.
-          // Using `createdAt` since we want a snapshot of jobs *created* or *updated* in this period.
-          // We will use `createdAt` here as the primary date filter for jobs.
-          createdAt: { $gte: start, $lt: end },
+          shopId: shopId,
+          $or: [
+            { createdAt: { $gte: start, $lt: end } },
+            { checkoutDate: { $gte: start, $lt: end } }
+          ],
         },
       },
       {
         $group: {
           _id: null,
           totalPartsCost: {
-            $sum: { $cond: [{ $eq: ["$isLocked", true] }, "$partsCost", 0] }
+            $sum: { $cond: [{ $and: [{ $eq: ["$isLocked", true] }, { $gte: ["$checkoutDate", start] }, { $lt: ["$checkoutDate", end] }] }, "$partsCost", 0] }
           },
           totalServiceFee: {
-            $sum: { $cond: [{ $eq: ["$isLocked", true] }, "$serviceFee", 0] }
+            $sum: { $cond: [{ $and: [{ $eq: ["$isLocked", true] }, { $gte: ["$checkoutDate", start] }, { $lt: ["$checkoutDate", end] }] }, "$serviceFee", 0] }
           },
           totalReserves: {
-            $sum: { $cond: [{ $eq: ["$isLocked", true] }, "$reserves", 0] }
+            $sum: { $cond: [{ $and: [{ $eq: ["$isLocked", true] }, { $gte: ["$checkoutDate", start] }, { $lt: ["$checkoutDate", end] }] }, "$reserves", 0] }
           },
-          totalJobs: { $sum: 1 },
-          // Group jobs by status counts
+          totalJobs: {
+            // Count jobs created in this period
+            $sum: { $cond: [{ $and: [{ $gte: ["$createdAt", start] }, { $lt: ["$createdAt", end] }] }, 1, 0] }
+          },
           pendingCount: {
-            $sum: { $cond: [{ $eq: ["$status", "pending"] }, 1, 0] }
+            $sum: { $cond: [{ $and: [{ $eq: ["$status", "pending"] }, { $gte: ["$createdAt", start] }, { $lt: ["$createdAt", end] }] }, 1, 0] }
           },
           progressCount: {
-            $sum: { $cond: [{ $eq: ["$status", "progress"] }, 1, 0] }
+            $sum: { $cond: [{ $and: [{ $eq: ["$status", "progress"] }, { $gte: ["$createdAt", start] }, { $lt: ["$createdAt", end] }] }, 1, 0] }
           },
           completeCount: {
-            $sum: { $cond: [{ $eq: ["$status", "complete"] }, 1, 0] }
+            $sum: { $cond: [{ $and: [{ $eq: ["$status", "complete"] }, { $gte: ["$createdAt", start] }, { $lt: ["$createdAt", end] }] }, 1, 0] }
           },
           cancelCount: {
-            $sum: { $cond: [{ $eq: ["$status", "cancel"] }, 1, 0] }
+            $sum: { $cond: [{ $and: [{ $eq: ["$status", "cancel"] }, { $gte: ["$createdAt", start] }, { $lt: ["$createdAt", end] }] }, 1, 0] }
           },
           checkedOutCount: {
-            $sum: { $cond: [{ $eq: ["$status", "checked_out"] }, 1, 0] }
+            // Count jobs checked out in this period
+            $sum: { $cond: [{ $and: [{ $eq: ["$status", "checked_out"] }, { $gte: ["$checkoutDate", start] }, { $lt: ["$checkoutDate", end] }] }, 1, 0] }
           },
         },
       },
